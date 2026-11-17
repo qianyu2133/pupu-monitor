@@ -79,7 +79,7 @@ flowchart LR
 环境：**Windows 10/11** + **Windows 版微信**（用来开朴朴小程序）+ Python 3.12/3.13
 
 ```bash
-git clone https://github.com/133898952133/pupu-monitor.git
+git clone https://github.com/qianyu2133/pupu-monitor.git
 cd pupu-monitor
 python -m pip install -r requirements.txt
 python desktop.py
