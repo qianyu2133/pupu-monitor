@@ -52,8 +52,11 @@ def is_on():
 def turn_on():
     was_on, old = _read()
     os.makedirs(os.path.dirname(BACKUP), exist_ok=True)
-    with open(BACKUP, "w", encoding="utf-8") as f:
-        f.write(("1" if was_on else "0") + "\n" + (old or ""))
+    # 只备份"真实的原值"。若旧值已经是自己的地址，说明上次没还原干净，
+    # 此时不能覆盖备份，否则会把 8080 永久固化成"用户的原始设置"。
+    if SERVER not in (old or ""):
+        with open(BACKUP, "w", encoding="utf-8") as f:
+            f.write(("1" if was_on else "0") + "\n" + (old or ""))
     _write(True, SERVER)
     return {"was_on": was_on, "old": old}
 
@@ -65,11 +68,14 @@ def turn_off():
             lines = f.read().splitlines()
         old_enable = lines[0] if lines else "0"
         old_server = lines[1] if len(lines) > 1 else ""
-    if old_server and old_server != SERVER:
+    if old_server and SERVER not in old_server:
         _write(old_enable == "1", old_server)
+        restored = old_server
     else:
-        _write(False, SERVER)
-    return {"restored": old_server or "(直连)", "enabled": old_enable == "1"}
+        # 没有可信备份：只关开关，绝不把自己的地址写进注册表
+        _write(False)
+        restored = "(直连)"
+    return {"restored": restored, "enabled": old_enable == "1"}
 
 
 # ---------- 证书 ----------
