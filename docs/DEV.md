@@ -143,6 +143,42 @@ open('data/_check.js','w',encoding='utf-8').write(js)
 | 界面按钮点了没反应 | 原生 `confirm()` 在 iframe 里被吞 | 一律用页内 `uiConfirm()`，不要用原生弹窗 |
 | 换地址后加购报错 | 出清池还是旧门店商品 | 已实现切地址自动清空 + 后台重抓 |
 
+## 同步到 GitHub
+
+仓库：<https://github.com/qianyu2133/pupu-monitor>
+
+```bash
+python tools/sync.py "fix: 修正轮询间隔"
+```
+
+自动完成：暂存 → 敏感扫描 → 提交 → 推送。可选参数：
+
+```bash
+python tools/sync.py --dry-run     # 只看会提交什么
+python tools/sync.py --no-push     # 只提交不推送
+```
+
+### 提交守卫
+
+首次 clone 后必须启用（hook 不会随仓库自动生效）：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`pre-commit` 会拦两类东西：
+
+| 类型 | 内容 |
+|---|---|
+| 路径 | `data/` `dist/` `build/` `*.db` `*.key` `*.pem` `*.cer` `config.json` |
+| 内容 | 手机号、JWT/Token、企业微信 webhook key |
+
+拦下来是有意的——这些东西一旦推到 GitHub 就删不干净（会被 fork、被缓存）。确认无风险后可用 `git commit --no-verify` 强制提交，但这基本不该发生。
+
+### 节奏
+
+**每次改动自测通过后立即同步，不要攒。** 攒着的结果通常是：某次改动把本地 `data/` 混进来，然后整批都不敢推了。
+
 ## 维护节奏
 
 | 触发 | 动作 |
