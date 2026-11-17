@@ -39,13 +39,14 @@ def main():
     no_push = "--no-push" in argv
     msg = " ".join(a for a in argv if not a.startswith("--")).strip()
 
-    # 1. 有无改动
-    changed = git("status", "--porcelain").stdout.strip()
-    if not changed:
+    # 1. 有无改动（用 diff + untracked 两个来源，避免解析 porcelain 的对齐问题）
+    tracked = set(filter(None, git("diff", "--name-only").stdout.splitlines()))
+    untracked = set(filter(None, git("ls-files", "--others", "--exclude-standard").stdout.splitlines()))
+    files = sorted(tracked | untracked)
+    if not files:
         print("没有改动，已是最新。")
         return 0
 
-    files = [line[3:] for line in changed.splitlines() if len(line) > 3]
     print(f"检测到 {len(files)} 个文件改动：")
     for f in files[:15]:
         print("   ", f)
