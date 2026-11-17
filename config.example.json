@@ -1,0 +1,28 @@
+{
+  "pupu": {
+    "host": "https://j1.pupuapi.com",
+    "cart_path": "/client/shopping_cart/shopping_cart/detail/v3",
+    "cart_method": "POST",
+    "refresh_path": "",
+    "price_scale": 0.01
+  },
+  "notify": {
+    "wecom_webhook": "",
+    "public_base": "http://127.0.0.1:8787"
+  },
+  "poll": {
+    "peak_start": 21,
+    "peak_end": 23,
+    "peak_interval": 12,
+    "idle_interval": 180,
+    "jitter": 0.3
+  },
+  "rule": {
+    "min_drop_pct": 5.0,
+    "min_drop_abs": 0.5,
+    "alert_on_clearance_tag": true
+  },
+  "danger": {
+    "allow_submit_order": false
+  }
+}

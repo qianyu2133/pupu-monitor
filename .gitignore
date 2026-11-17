@@ -1,0 +1,41 @@
+# ===== 用户数据（绝对不入库）=====
+# 里面有你的 token、收货地址、下单模板、聊天记录
+data/
+
+# 加密密钥
+secret.key
+*.key
+
+# 用户配置（含 webhook 和锁单开关状态）
+# 模板见 config.example.json，不存在时代码会自动生成
+config.json
+
+# 抓包证书与私钥
+*.pem
+*.cer
+*.p12
+
+# 打包产物
+build/
+dist/
+*.spec.bak
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ===== 编辑器 / 系统 =====
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ===== 日志与临时 =====
+*.log
+_smoke/
+_check.js
