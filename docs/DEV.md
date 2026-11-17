@@ -50,7 +50,18 @@ python tools/proxy.py on|off|status   # 命令行切系统代理
 
 ## 打包
 
-两个 spec，产物互不影响：
+**推荐用一键脚本**（打包 + 同步数据 + 生成干净版，一步到位）：
+
+```bash
+python tools/release.py both      # 两个版本都打
+python tools/release.py onedir    # 只打文件夹版
+python tools/release.py onefile   # 只打单文件版
+python tools/release.py clean     # 只重新生成干净版（不打包）
+```
+
+它会自动做：打包 → 拷 `data/`+`config.json` 到产物 → 生成不含用户数据的分发包 → 自检（发现 `data/`、`*.db`、`*.key`、`*.pem` 就中止）→ 打印体积。
+
+**手动打包**（需要控制细节时）：
 
 ```bash
 # 文件夹版（日常用，启动快，杀软误报少）

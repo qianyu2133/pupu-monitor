@@ -72,7 +72,16 @@ chujian/
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 进程模型、模块职责、三条数据流、非显然的设计决策 |
 | [docs/PUPU-API.md](docs/PUPU-API.md) | 朴朴接口逆向笔记：全部路径、字段、坑、失效排查顺序 |
 | [docs/DEV.md](docs/DEV.md) | 开发环境、打包、发版检查清单、常见问题 |
+| [docs/research/](docs/research/README.md) | 前期调研归档（标注了哪些结论已被推翻） |
 | [CHANGELOG.md](CHANGELOG.md) | 版本历史与已知待办 |
+
+发版一条命令：
+
+```bash
+python tools/release.py both     # 打两个版本 + 同步数据 + 生成干净分发包
+```
+
+仓库不含任何用户数据：`data/`、`secret.key`、`config.json` 均被忽略，配置模板见 `config.example.json`。
 
 ## 配置
 
