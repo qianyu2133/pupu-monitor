@@ -48,7 +48,8 @@ class PupuAdapter(Adapter):
         else:
             items = self._fetch_by_config()
         try:
-            db.upsert_scan("pupu", items, "购物车")
+            # 注意：这里不再 upsert_scan。出清池只存「疯狂折扣」页的商品，
+            # 否则购物车轮询会把自己的商品灌进池子，活动结束后也清不掉。
             db.replace_cart("pupu", [it.sku for it in items])
             db.mark_in_cart("pupu", [(it.raw or {}).get("product_id") for it in items])
         except Exception:
@@ -359,8 +360,13 @@ class PupuAdapter(Adapter):
             if data.get("is_end_page") or not plist:
                 break
             time.sleep(delay)
-        print(f"[crazy_discount] 抓了 {pages} 页，{len(out)} 件")
-        return list(out.values())
+        # 恢复原价的商品不算出清：有原价且现价≥95% 原价的剔除
+        rows = [
+            r for r in out.values()
+            if not (r.get("origin_price") and r["price"] >= r["origin_price"] * 0.95)
+        ]
+        print(f"[crazy_discount] 抓了 {pages} 页，原始 {len(out)} 件，有效出清 {len(rows)} 件")
+        return rows
 
     def fetch_flashsale(self):
         """拉「疯狂折扣」页的全部商品（无分页，一次返回当前场次）。"""

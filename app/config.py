@@ -19,8 +19,9 @@ DEFAULTS = {
     "poll": {
         "peak_start": 21,
         "peak_end": 23,
-        "peak_interval": 12,
-        "idle_interval": 180,
+        "cart_peak_interval": 8,
+        "cart_idle_interval": 60,
+        "scan_interval": 1800,
         "jitter": 0.3,
     },
     "rule": {"min_drop_pct": 5.0, "min_drop_abs": 0.5, "alert_on_clearance_tag": True},
@@ -40,6 +41,25 @@ def _merge(base, over):
     return out
 
 
+def _migrate(cfg, raw_poll=None):
+    """把单一一档的 peak_interval/idle_interval 迁移成「购物车轮询 + 出清池任务」两套。
+
+    判断依据必须是**原始文件里有没有旧键**——DEFAULTS 已经带了新键，
+    拿 merge 后的结果判断会永远认为「已迁移」，旧键就永远清不掉。
+    """
+    p = cfg.setdefault("poll", {})
+    legacy = [k for k in ("peak_interval", "idle_interval") if k in (raw_poll or {})]
+    if not legacy:
+        return False
+    # 旧节奏（12/180）正是用户嫌慢的那套，直接用新的默认值，不沿用旧数
+    p["cart_peak_interval"] = 8
+    p["cart_idle_interval"] = 60
+    p.setdefault("scan_interval", 1800)
+    for k in legacy:
+        p.pop(k, None)
+    return True
+
+
 def load(reload=False):
     global _cache
     if _cache is not None and not reload:
@@ -55,6 +75,13 @@ def load(reload=False):
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(DEFAULTS, f, ensure_ascii=False, indent=2)
     _cache = _merge(DEFAULTS, raw)
+    if _migrate(_cache, raw.get("poll") or {}):
+        save(_cache)
+        print("[config] 已迁移轮询配置：购物车 %ss/%ss，出清池 %ss" % (
+            _cache["poll"]["cart_peak_interval"],
+            _cache["poll"]["cart_idle_interval"],
+            _cache["poll"]["scan_interval"],
+        ))
     return _cache
 
 

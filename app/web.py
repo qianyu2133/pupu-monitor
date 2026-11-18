@@ -84,6 +84,7 @@ def state():
         "snapshot": db.latest_snapshot(120),
         "scan": db.list_scan(600),
         "scan_stats": db.scan_stats(),
+        "last_scan": scheduler.monitor.last_scan,
         "watches": [w["sku"] for w in db.list_watch("pupu")],
         "allow_submit": bool(cfg.get("danger", {}).get("allow_submit_order")),
         "last_order": db.last_submit(),
@@ -102,6 +103,17 @@ def state():
             "host": cfg["pupu"].get("host", ""),
             "wecom_set": bool(cfg["notify"].get("wecom_webhook")),
         },
+    }
+
+
+@app.get("/api/cart")
+def cart_only():
+    """只返回购物车快照。加购 / 删除后用这个局部刷新，不要拉整个 state。"""
+    return {
+        "snapshot": db.latest_snapshot(120),
+        "last_refresh": db.last_refresh_ts(),
+        "interval": round(scheduler.current_interval(), 1),
+        "refreshing": _refreshing(),
     }
 
 
@@ -231,8 +243,8 @@ def scan_refresh():
         rows = PupuAdapter(cred).fetch_crazy_discount()
     except AdapterError as e:
         raise HTTPException(400, str(e))
-    n = db.upsert_scan("pupu", rows, "疯狂折扣")
-    return {"ok": True, "fetched": len(rows), "written": n}
+    written, removed = db.replace_scan("pupu", rows, "疯狂折扣")
+    return {"ok": True, "fetched": len(rows), "written": written, "stale_removed": removed}
 
 
 @app.post("/api/scan/add")
@@ -702,6 +714,48 @@ async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-
 
 function imgTag(src,cls){return src?('<img class="'+cls+'" src="'+esc(src)+'" loading="lazy" onerror="this.remove()">'):'<div class="'+cls+' ph">无图</div>'}
 
+function renderCart(items){
+  items=items||S.snapshot||[];
+  el('cntItem').textContent=items.length?items.length+' 件':'';
+  el('tabCart').textContent=items.length;
+  el('items').innerHTML=items.length?items.map(i=>{
+    const on=sel.has(i.sku), star=(S.watches||[]).includes(i.sku);
+    const disc=(i.origin_price&&i.price<i.origin_price)?(i.price/i.origin_price*10).toFixed(1)+'折':'';
+    const tg=(i.tags||'').split(',').filter(Boolean).slice(0,2).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ');
+    return '<div class="card'+(on?' sel':'')+'">'+imgTag(i.image,'thumb')+
+      '<div class="chk" data-sel="'+esc(i.sku)+'"></div>'+
+      '<div class="meta"><div class="nm">'+esc(i.name)+'</div>'+
+      '<div class="pr"><span class="now">'+yuan(i.price)+'</span>'+
+      (i.origin_price&&i.origin_price>i.price?'<span class="was">'+yuan(i.origin_price)+'</span>':'')+
+      (disc?'<span class="off">'+disc+'</span>':'')+'</div>'+
+      '<div class="sub">'+
+        '<span class="star'+(star?' on':'')+'" data-star="'+esc(i.sku)+'" title="重点监控">'+(star?'\u2605':'\u2606')+'</span>'+
+        (tg||'')+(i.qty>1?'<span>x'+i.qty+'</span>':'')+
+        '<button class="del" data-rm="'+esc(i.sku)+'">移除</button>'+
+      '</div></div></div>';
+  }).join(''):'<div class="empty">购物车是空的</div>';
+  el('items').querySelectorAll('[data-sel]').forEach(function(b){ b.onclick=function(){ toggleSel(this.dataset.sel) } });
+  el('items').querySelectorAll('[data-star]').forEach(function(b){ b.onclick=function(){ doWatch(this.dataset.star) } });
+  el('items').querySelectorAll('[data-rm]').forEach(function(b){ b.onclick=function(){ doRemoveOne(this.dataset.rm) } });
+  // 选中栏
+  const chosen=items.filter(i=>sel.has(i.sku));
+  const sum=chosen.reduce((a,b)=>a+Number(b.price),0);
+  el('bar').className='bar'+(chosen.length?'':' hide');
+  el('selN').textContent=chosen.length;
+  el('selSum').textContent=yuan(sum);
+  el('btnLock').disabled=!S.allow_submit;
+  el('barHint').textContent=S.allow_submit?'':'锁单已关闭（config.json → danger.allow_submit_order）';
+}
+
+async function refreshCartOnly(){
+  try{
+    const r=await fetch('/api/cart'); const d=await r.json();
+    S.snapshot=d.snapshot; S.last_refresh=d.last_refresh;
+    el('stLast').textContent=hhmmss(S.last_refresh)+(S.last_refresh?'（'+ago(S.last_refresh)+'）':'');
+    renderCart(d.snapshot);
+  }catch(e){}
+}
+
 function render(){
   const m=S.monitor;
   el('dot').className='dot'+(m?' on':'');
@@ -736,29 +790,8 @@ function render(){
     b.onclick=function(){ doAdd(this.dataset.sku, this) };
   });
 
-  const items=S.snapshot||[];
-  el('cntItem').textContent=items.length?items.length+' 件':'';
-  el('tabCart').textContent=items.length;
   el('tabScan').textContent=sc.length;
-  el('items').innerHTML=items.length?items.map(i=>{
-    const on=sel.has(i.sku), star=(S.watches||[]).includes(i.sku);
-    const disc=(i.origin_price&&i.price<i.origin_price)?(i.price/i.origin_price*10).toFixed(1)+'折':'';
-    const tg=(i.tags||'').split(',').filter(Boolean).slice(0,2).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ');
-    return '<div class="card'+(on?' sel':'')+'">'+imgTag(i.image,'thumb')+
-      '<div class="chk" data-sel="'+esc(i.sku)+'"></div>'+
-      '<div class="meta"><div class="nm">'+esc(i.name)+'</div>'+
-      '<div class="pr"><span class="now">'+yuan(i.price)+'</span>'+
-      (i.origin_price&&i.origin_price>i.price?'<span class="was">'+yuan(i.origin_price)+'</span>':'')+
-      (disc?'<span class="off">'+disc+'</span>':'')+'</div>'+
-      '<div class="sub">'+
-        '<span class="star'+(star?' on':'')+'" data-star="'+esc(i.sku)+'" title="重点监控">'+(star?'\u2605':'\u2606')+'</span>'+
-        (tg||'')+(i.qty>1?'<span>x'+i.qty+'</span>':'')+
-        '<button class="del" data-rm="'+esc(i.sku)+'">移除</button>'+
-      '</div></div></div>';
-  }).join(''):'<div class="empty">购物车是空的</div>';
-  el('items').querySelectorAll('[data-sel]').forEach(function(b){ b.onclick=function(){ toggleSel(this.dataset.sel) } });
-  el('items').querySelectorAll('[data-star]').forEach(function(b){ b.onclick=function(){ doWatch(this.dataset.star) } });
-  el('items').querySelectorAll('[data-rm]').forEach(function(b){ b.onclick=function(){ doRemoveOne(this.dataset.rm) } });
+  renderCart();
 
   const as=S.alerts||[];
   el('cntAlert').textContent=as.length?as.length+' 条':'';
@@ -808,14 +841,7 @@ function render(){
     if(ub) ub.onclick=function(){ doCancelOrder(this.dataset.oid) };
   } else { el('lastOrder').style.display='none' }
 
-  // 选中栏
-  const chosen=items.filter(i=>sel.has(i.sku));
-  const sum=chosen.reduce((a,b)=>a+Number(b.price),0);
-  el('bar').className='bar'+(chosen.length?'':' hide');
-  el('selN').textContent=chosen.length;
-  el('selSum').textContent=yuan(sum);
-  el('btnLock').disabled=!S.allow_submit;
-  el('barHint').textContent=S.allow_submit?'':'锁单已关闭（config.json → danger.allow_submit_order）';
+
   setView(view);
   if(!wizAutoOpened && !(S.creds||[]).length){ wizAutoOpened=true; wizOpen(); }
   if(!addrLoaded && (S.creds||[]).length){ addrLoaded=true; loadAddresses(); }
@@ -832,7 +858,17 @@ async function doWatch(sku){
   const on=!(S.watches||[]).includes(sku);
   try{ await post('/api/watch',{sku:sku,on:on}); await load(); }catch(e){ await uiAlert('操作失败：'+e.message) }
 }
-function toggleSel(sku){ if(sel.has(sku)) sel.delete(sku); else sel.add(sku); render(); }
+function toggleSel(sku){
+  if(sel.has(sku)) sel.delete(sku); else sel.add(sku);
+  const chk=[].slice.call(el('items').querySelectorAll('[data-sel]')).filter(function(n){return n.dataset.sel===sku})[0];
+  if(chk) chk.parentElement.classList.toggle('sel', sel.has(sku));
+  const items=S.snapshot||[];
+  const chosen=items.filter(function(i){return sel.has(i.sku)});
+  const sum=chosen.reduce(function(a,b){return a+Number(b.price)},0);
+  el('bar').className='bar'+(chosen.length?'':' hide');
+  el('selN').textContent=chosen.length;
+  el('selSum').textContent=yuan(sum);
+}
 function setCat(node,c){
   curCat=c;
   document.querySelectorAll('[data-c]').forEach(function(n){ n.classList.toggle('on', n.dataset.c===c) });
@@ -859,13 +895,13 @@ async function clearScan(){ if(!await uiConfirm('清空出清池？已收集的�
 
 async function doRemoveOne(sku){
   if(!await uiConfirm('从购物车里移除这件商品？')) return;
-  try{ await post('/api/cart/remove',{skus:[sku]}); sel.delete(sku); await uiAlert('已移除'); await load(); }
+  try{ await post('/api/cart/remove',{skus:[sku]}); sel.delete(sku); await uiAlert('已移除'); await refreshCartOnly(); }
   catch(e){ await uiAlert('移除失败：'+e.message+'\\n\\n（如果提示「请求还没录到」：开着抓包在 App 里手动删一件，就会自动录下来）'); }
 }
 async function doRemove(){
   const skus=[...sel]; if(!skus.length) return;
   if(!await uiConfirm('从购物车移除这 '+skus.length+' 件商品？')) return;
-  try{ await post('/api/cart/remove',{skus}); sel.clear(); await load(); await uiAlert('已移除 '+skus.length+' 件'); }
+  try{ await post('/api/cart/remove',{skus}); sel.clear(); await refreshCartOnly(); await uiAlert('已移除 '+skus.length+' 件'); }
   catch(e){ await uiAlert('移除失败：'+e.message); }
 }
 async function doLock(){
@@ -916,9 +952,15 @@ async function doAdd(sku, btn){
   const old=btn?btn.textContent:'';
   if(btn){ btn.disabled=true; btn.textContent='加购中' }
   try{
-    const r=await post('/api/scan/add',{sku:sku});
-    if(btn){ btn.textContent='已加购' }
-    setTimeout(load, 800);
+    await post('/api/scan/add',{sku:sku});
+    // 局部更新：删掉这一行，只刷购物车，不拉整个 state
+    const tr=btn?btn.closest('tr'):null;
+    if(tr){
+      tr.remove();
+      el('cntScan').textContent='可加购 '+el('scan').querySelectorAll('tbody tr').length+' 件';
+      el('tabScan').textContent=Math.max(0,Number(el('tabScan').textContent||1)-1);
+    }
+    await refreshCartOnly();
   }catch(e){
     await uiAlert('加购失败：'+e.message);
     if(btn){ btn.disabled=false; btn.textContent=old }

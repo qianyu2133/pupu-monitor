@@ -713,6 +713,28 @@ def list_watch(platform=None):
             c.close()
 
 
+def replace_scan(platform, items, source="疯狂折扣"):
+    """全量替换出清池：写入本次抓到的，删掉本次没出现的。
+
+    只在「完整抓取成功」之后调用——中途失败时不要清，否则会误删一半。
+    分两步各自加锁，避免 _lock 嵌套死锁。
+    """
+    t0 = int(time.time())
+    written = upsert_scan(platform, items, source)
+    with _lock:
+        c = _connect()
+        try:
+            r = c.execute(
+                "DELETE FROM scan_item WHERE platform=? AND (last_seen IS NULL OR last_seen < ?)",
+                (platform, t0),
+            )
+            removed = r.rowcount
+            c.commit()
+        finally:
+            c.close()
+    return written, max(0, int(removed or 0))
+
+
 def list_scan(limit=120, max_discount=1.0):
     """按折扣从低到高排（越靠前越便宜）。"""
     with _lock:

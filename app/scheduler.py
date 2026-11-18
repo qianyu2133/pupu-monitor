@@ -12,11 +12,15 @@ BUILDERS = {"pupu": PupuAdapter, "mock": MockAdapter}
 
 
 def current_interval():
+    """购物车轮询间隔。出清池走独立的低频任务，不受这里影响。"""
     p = config.load()["poll"]
     h = time.localtime().tm_hour
     ps, pe = int(p.get("peak_start", 21)), int(p.get("peak_end", 23))
     peak = (ps <= h < pe) if ps <= pe else (h >= ps or h < pe)
-    base = float(p.get("peak_interval", 12) if peak else p.get("idle_interval", 180))
+    if peak:
+        base = float(p.get("cart_peak_interval", 8))
+    else:
+        base = float(p.get("cart_idle_interval", 60))
     j = float(p.get("jitter", 0.3))
     return max(5.0, base * random.uniform(1 - j, 1 + j))
 
@@ -28,6 +32,9 @@ class Monitor:
         self.state = {}  # cred_id -> {last_run, last_error, next_at, platform, account}
         self.last_tick = 0
         self.requested_at = 0
+        self.scan_next_at = 0
+        self.scan_busy = False
+        self.last_scan = 0
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -69,6 +76,7 @@ class Monitor:
                 continue
 
             now = time.time()
+            self._maybe_scan(now)
             for cred in creds:
                 st = self.state.setdefault(
                     cred["id"],
@@ -83,6 +91,35 @@ class Monitor:
                 self._tick(cred, st)
                 st["next_at"] = time.time() + current_interval()
             time.sleep(1)
+
+    def _maybe_scan(self, now):
+        """出清池全量抓取：低频、独立线程，不占用购物车的轮询节奏。"""
+        interval = float(config.load()["poll"].get("scan_interval", 1800) or 0)
+        if interval <= 0 or now < self.scan_next_at or self.scan_busy:
+            return
+        self.scan_busy = True
+        self.scan_next_at = now + interval
+        threading.Thread(target=self._scan_tick, name="scan", daemon=True).start()
+
+    def _scan_tick(self):
+        try:
+            cred = next(
+                (c for c in db.list_credentials()
+                 if c["platform"] == "pupu" and c["status"] == "ok"),
+                None,
+            )
+            if not cred:
+                return
+            rows = PupuAdapter(cred).fetch_crazy_discount()
+            written, removed = db.replace_scan("pupu", rows, "疯狂折扣")
+            self.last_scan = int(time.time())
+            print(f"[scan] 自动抓取：{len(rows)} 件有效，写入 {written}，清理过期 {removed}")
+        except AuthExpired as e:
+            print(f"[scan] 凭证失效，跳过本轮：{e}")
+        except Exception as e:
+            print(f"[scan] 自动抓取失败：{type(e).__name__}: {e}")
+        finally:
+            self.scan_busy = False
 
     def _tick(self, cred, st):
         builder = BUILDERS.get(cred["platform"])

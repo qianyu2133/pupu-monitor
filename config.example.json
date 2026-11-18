@@ -13,8 +13,9 @@
   "poll": {
     "peak_start": 21,
     "peak_end": 23,
-    "peak_interval": 12,
-    "idle_interval": 180,
+    "cart_peak_interval": 8,
+    "cart_idle_interval": 60,
+    "scan_interval": 1800,
     "jitter": 0.3
   },
   "rule": {

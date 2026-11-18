@@ -25,19 +25,19 @@ ChujianMonitor.exe
 | `app/paths.py` | 统一根目录。开发时=项目目录，打包后=`sys.executable` 所在目录 | 15 |
 | `app/config.py` | `config.json` 读写（轮询节奏、推送、规则、危险开关） | 72 |
 | `app/crypto.py` | Fernet 加解密，密钥在 `data/secret.key` | 57 |
-| `app/db.py` | SQLite 全部读写，14 张表，`_lock` 串行 | 870 |
+| `app/db.py` | SQLite 全部读写，14 张表，`_lock` 串行 | 892 |
 | `app/models.py` | `Item` 数据类（sku/name/price/origin_price/qty/tags/image/raw/platform） | 27 |
 | `app/adapters/base.py` | `Adapter` 抽象 + 三种异常（`AuthExpired` / `NotConfigured` / `AdapterError`） | 17 |
 | `app/adapters/pupu.py` | **核心**。朴朴全部读写接口、请求头合成、模板重放、下单/取消 | 559 |
 | `app/adapters/parser.py` | 购物车专用解析 `parse_pupu` + 通用收割 `harvest_products` + 样本落盘 | 250 |
 | `app/adapters/mock.py` | 演示用的假平台，用于无凭证跑通链路 | 40 |
 | `app/rules.py` | 价格比对 → 是否告警 → 写历史 + 推通知（含 10 分钟同类冷却） | 60 |
-| `app/scheduler.py` | 分层轮询：高峰 12s / 平峰 180s，±30% 抖动，连续不变退避 | 113 |
+| `app/scheduler.py` | 两条独立节奏：购物车轮询（高峰 8s / 平峰 60s，±30% 抖动）+ 出清池全量任务（默认 1800s，独立线程） | 150 |
 | `app/notify.py` | 企业微信群机器人 markdown 推送（降价 / 凭证失效 / 新出清） | 67 |
 | `app/classify.py` | 本地三分类：肉类 / 海鲜 / 其它。先剔专名再判词 | 61 |
 | `app/sysproxy.py` | Windows 系统代理开关（HKCU 注册表，带原值备份还原）+ 证书装/卸（指纹精确匹配） | 149 |
 | `app/proxy_host.py` | 把 mitmproxy 跑在子线程里，提供 start/stop/ca_file | 82 |
-| `app/web.py` | FastAPI 应用 + 内嵌单页（HTML/CSS/JS 字符串），27 个端点 | 1005 |
+| `app/web.py` | FastAPI 应用 + 内嵌单页（HTML/CSS/JS 字符串），28 个端点 | 1047 |
 | `tools/grab_token.py` | mitmproxy addon：提凭证、存请求头档案、录制读写模板、收割商品入池 | 251 |
 | `tools/capture.py` | 独立的抓包启动器（不依赖 exe，调试用） | 103 |
 | `tools/proxy.py` | 命令行代理开关 | 80 |
@@ -67,9 +67,9 @@ scheduler._loop() 每 1s 检查 next_at
        └─ 有 replay 就走 _fetch_by_replay（原样重放 + 换头）
        └─ 无 replay 走 _fetch_by_config（按 config 拼 URL）
             → parse_pupu() → Item[]
-                 ├─ db.upsert_scan()     收进出清池
                  ├─ db.replace_cart()    记录"此刻车里有什么"
                  ├─ db.mark_in_cart()    反标池子里哪些已在车上
+                 │   （注意：购物车商品**不再写入**出清池，否则活动结束后清不掉）
                  └─ rules.process()
                       ├─ 与 price_history 上一次比价
                       ├─ 星标商品：降 1 分即告警
@@ -80,11 +80,13 @@ scheduler._loop() 每 1s 检查 next_at
 ### ③ 出清池全量抓取
 
 ```
-POST /api/scan/refresh
+POST /api/scan/refresh   （或 scheduler 的 30 分钟自动任务）
   └─ fetch_crazy_discount()  循环 GET hub/v2?page=N，最多 20 页
-       ├─ 每页 sleep 350ms（13 页约 5s，避免被当扫描）
+       ├─ 每页 sleep 350ms（15 页约 6s，避免被当扫描）
        ├─ 靠 is_end_page 终止，不靠 count
-       └─ harvest_products() → upsert_scan()，按 (platform, sku) 去重覆盖
+       ├─ harvest_products() 之后过滤：有原价且现价 ≥95% 原价的剔除（活动已结束）
+       └─ db.replace_scan()：写入本次抓到的，删除 last_seen 早于本次开始时间的
+            → 已下架、已恢复原价的商品不会留在池子里
 ```
 
 ## 几个非显然的设计决策
@@ -97,6 +99,12 @@ POST /api/scan/refresh
 
 **为什么删除是「数量置 0」**
 朴朴没有独立删除接口。加购、改数量、删除共用 `purchasing_product/v3`，`selected_count=0` 即移除。前两次排查都因为"路径里没有 delete"而漏掉。
+
+**为什么购物车和出清池用两条独立节奏**
+两者成本和时效完全不同：购物车一次请求（几十 KB），价格随时会变，值得高频；出清池要翻 15 页（约 6 秒、15 个请求），商品一天只换几次。早期共用一个节奏的结果是——购物车被拖到 180 秒才刷一次，出清池又跟着买菜的节奏空转。现在拆成两个任务：购物车 8s/60s，出清池 30 分钟，互不阻塞（出清池跑在独立线程）。
+
+**为什么池子用「全量替换」而不是累加**
+`upsert` 只增不删，昨天的商品会永远留着——用户看到的是已经恢复原价的东西。现在每次抓取记录开始时间 `t0`，写完本次的之后删掉 `last_seen < t0` 的，即「这次没抓到就是下架了」。同时过滤掉现价 ≥95% 原价的（活动结束）。清理只在**完整抓取成功**后执行，中途失败不动，避免误删一半。
 
 **为什么证书要比对指纹**
 早期实现用 `certutil -verifystore Root mitmproxy` 判断，只要机器上装过任意一份同名证书就返回 true。换版本后新 CA 尚未安装，向导却显示"已信任"，流量解不开。现改为算本机 CA 的 SHA1 再精确比对。
