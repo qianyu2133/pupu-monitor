@@ -107,6 +107,9 @@ def request(flow: http.HTTPFlow):
             _record_replay(flow, "order_submit", "提交订单请求")
         if "cart" in low and any(k in low for k in ("delete", "remove")):
             _record_replay(flow, "cart_write", "购物车删除请求")
+        # 加购/改数量/删除三合一接口：点加购、点 +1/-1 都会走这里
+        if "purchasing_product" in low:
+            _record_replay(flow, "cart_write", "购物车加购/改数量请求")
 
         # GET 的频道/秒杀列表：把带参数的完整 URL 记下来（找分页参数用）
         if flow.request.method == "GET" and (
@@ -142,6 +145,14 @@ def request(flow: http.HTTPFlow):
         uid = flow.request.headers.get("pp-userid") or flow.request.headers.get("PP-Userid") or ""
         if auth and len(auth) > 12:
             db.record_capture(host, flow.request.method, path, note="带凭证 " + crypto.mask(auth))
+            # 购物车/收货地址这类「读取」请求的头里带实时 sign-v2，是最新的：
+            # 每次抓到都刷一遍 header_profile，写接口重放时就能拿到新鲜签名，
+            # 而不是各模板里那份早已过期的。token 变了另走下面分支。
+            if "cart" in low or "receiver" in low:
+                try:
+                    db.save_headers("pupu", dict(flow.request.headers))
+                except Exception as e:
+                    print(f"[warn] 请求头存档失败: {e}")
             if auth != _last["token"]:
                 db.upsert_credential("pupu", ACCOUNT, access_token=auth, user_id=uid or None, extra=host)
                 try:

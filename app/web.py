@@ -914,7 +914,7 @@ async function clearScan(){ if(!await uiConfirm('清空出清池？已收集的�
 async function doRemoveOne(sku){
   if(!await uiConfirm('从购物车里移除这件商品？')) return;
   try{ await post('/api/cart/remove',{skus:[sku]}); sel.delete(sku); await uiAlert('已移除'); await refreshCartOnly(); }
-  catch(e){ await uiAlert('移除失败：'+e.message+'\\n\\n（如果提示「请求还没录到」：开着抓包在 App 里手动删一件，就会自动录下来）'); }
+  catch(e){ await uiAlert('移除失败：'+e.message+'\\n\\n（若提示「接口还没录到」：开着抓包，在 App 里把数量 −1 或删除一件，录一次以后就永久有效）'); }
 }
 async function doRemove(){
   const skus=[...sel]; if(!skus.length) return;
@@ -996,7 +996,7 @@ async function doAdd(sku, btn){
     }
     await refreshCartOnly();
   }catch(e){
-    await uiAlert('加购失败：'+e.message);
+    await uiAlert('加购失败：'+e.message+'\\n\\n（若提示「接口还没录到」：开着抓包，在 App 里点一次加购或把数量 +1，录一次以后就永久有效）');
     if(btn){ btn.disabled=false; btn.textContent=old }
   }
 }

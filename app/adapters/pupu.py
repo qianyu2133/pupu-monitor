@@ -56,11 +56,22 @@ class PupuAdapter(Adapter):
             pass
         return items
 
-    def _hdrs(self, rep=None):
+    # 这些头是「请求体 + 时间」绑定的签名，会随录制模板一起过期。
+    # 写接口（加购/删除/勾选/下单/取消）重放时剥掉它们，让服务端重新算，
+    # 否则模板一过期写操作就全报 200099。
+    SIGNATURE_HEADERS = (
+        "sign-v2", "seal-v2", "sign", "seal", "timestamp", "nonce", "time",
+    )
+
+    def _hdrs(self, rep=None, strip_signature=False):
         """优先用抓包时存下的最新请求头，再叠加当前 token。
 
         这样 token 过期重抓一次后，所有录制模板都会自动用上新头，
         不需要重录。
+
+        strip_signature=True 时丢掉 sign-v2 / seal-v2 / timestamp 等
+        「随请求体+时间过期」的头——写接口的 body 是我们重建的，录制时的
+        签名必然对不上，保留它们只会被服务端以 200099 拒掉。
         """
         rep_headers = (rep or {}).get("headers") or {}
         base = db.get_headers("pupu") or rep_headers
@@ -73,6 +84,11 @@ class PupuAdapter(Adapter):
         for k, v in rep_headers.items():
             if k.lower() == "content-type":
                 h[k] = v
+        if strip_signature:
+            h = {
+                k: v for k, v in h.items()
+                if k.lower() not in self.SIGNATURE_HEADERS
+            }
         token = self.cred.get("access_token")
         if token:
             hit = False
@@ -236,7 +252,8 @@ class PupuAdapter(Adapter):
         """用录到的模板发一次请求，body 由我们重建。"""
         if not rep or not rep.get("url"):
             raise NotConfigured(f"{label}的请求还没录到，开着抓包在 App 里操作一次")
-        headers = self._hdrs(rep)
+        # 写接口 body 是重建的，录制时的签名对不上，剥掉让它重算
+        headers = self._hdrs(rep, strip_signature=True)
         payload = None if body is None else json.dumps(body, ensure_ascii=False, separators=(",", ":"))
         r = self.s.request(rep.get("method") or "POST", rep["url"], headers=headers, data=payload, timeout=20)
         if r.status_code in (401, 403):
@@ -286,11 +303,15 @@ class PupuAdapter(Adapter):
         return ro
 
     def _post_cart_item(self, ro):
-        rep = db.get_replay("pupu", "w:client_shopping_cart_shopping_cart_item_purchasing_product_v3")
+        rep = db.get_replay("pupu", "cart_write") or db.get_replay(
+            "pupu", "w:client_shopping_cart_shopping_cart_item_purchasing_product_v3"
+        )
         if not rep:
             rep = db.find_replay("pupu", ("purchasing_product",))
         if not rep:
-            raise NotConfigured("这个接口还没录到：在 App 里把某件商品数量 +1 再 -1，就会自动录下")
+            raise NotConfigured(
+                "加购/删除接口还没录到：开着抓包，在 App 里把任意一件商品数量 +1 再 −1（或点一次加购），录一次以后就永久有效"
+            )
         payload = {"add_item_ro": ro, "return_data_type": 0, "purchase_pattern": 10}
         return self._send(rep, payload, "修改购物车")
 
