@@ -53,6 +53,7 @@ def _wait_ready(timeout=20):
 
 def main():
     db.init()
+    sysproxy.heal_on_start()   # 上次被强杀可能把系统代理留在本程序上 → 先还原
     proxy.start()
 
     threading.Thread(target=_serve, name="web", daemon=True).start()

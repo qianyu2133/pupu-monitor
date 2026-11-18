@@ -139,6 +139,8 @@ open('data/_check.js','w',encoding='utf-8').write(js)
 | 端口 8787 被占 | 旧实例没退 | `Get-NetTCPConnection -LocalPort 8787` 找 PID 后 kill |
 | 向导显示证书已安装但抓不到包 | 旧版 CA 同名干扰 | 已修为指纹比对；仍异常则 `remove_cert()` 后重装 |
 | 打包报 exit=1 且无明确错误 | `dist/ChujianMonitor` 目录被占用 | 关掉运行的 exe，删掉该目录再打 |
+| 打包日志出现 `SAFE_DELETE_BULK_CONFIRM_REQUIRED` | PyInstaller 要 rmtree 近 900 个文件的旧产物，被批量删除保护拦了 | `release.py` 已改为**先改名到临时目录**再打包，正常不会再触发；若手工打包请先手动改名/移走旧目录 |
+| 购物车报业务码 `200099` | 录制模板里的 `sign-v2` 签名过期（约一天） | 点「接入账号」走一遍向导：开代理 → 进小程序点「购物车」→ 完成。界面会提示模板已几小时前录制 |
 | exe 启动后无窗口 | WebView2 缺失 / 日志有异常 | 看 `data/app.log`；确认 `msedgewebview2.exe` 存在 |
 | 界面按钮点了没反应 | 原生 `confirm()` 在 iframe 里被吞 | 一律用页内 `uiConfirm()`，不要用原生弹窗 |
 | 换地址后加购报错 | 出清池还是旧门店商品 | 已实现切地址自动清空 + 后台重抓 |

@@ -175,7 +175,7 @@ def _refill_scan_bg():
         cred = _best_cred()
         if cred:
             rows = PupuAdapter(cred).fetch_crazy_discount()
-            db.upsert_scan("pupu", rows, "疯狂折扣")
+            db.replace_scan("pupu", rows, "疯狂折扣")
     except Exception as e:
         print(f"[rescan] 换店后重抓失败: {e}")
 
@@ -183,12 +183,14 @@ def _refill_scan_bg():
 @app.get("/api/setup")
 def setup_state():
     creds = [c for c in db.list_credentials("pupu")]
+    rep = db.get_replay("pupu", "cart")
     return {
         "proxy_running": bool(proxy.running),
         "proxy_on": sysproxy.is_on(),
         "cert": sysproxy.cert_installed(),
         "hits": db.total_hits(),
         "has_token": bool(creds),
+        "cart_ts": (rep or {}).get("ts", 0),
         "cred_status": [c.get("status") for c in creds],
         "ca": sysproxy.ca_path(),
         "proxy_error": proxy.error,
@@ -574,6 +576,7 @@ tr:last-child td{border-bottom:none}
 <div class="row" style="border:none;padding:0 0 10px">
   <span class="muted">收货地址</span>
   <select id="addrSel" onchange="changeAddr(this)" style="max-width:420px"></select>
+  <button id="addrBtn" onclick="refreshAddr(this)" style="padding:2px 9px;font-size:12px">刷新</button>
   <span class="muted" id="addrHint"></span>
 </div>
 <div id="lastOrder" class="muted" style="display:none;margin:-2px 0 10px"></div>
@@ -707,6 +710,12 @@ function dlgYes(){ el('mask').classList.add('hide'); if(_dlg){const r=_dlg;_dlg=
 function dlgNo(){ el('mask').classList.add('hide'); if(_dlg){const r=_dlg;_dlg=null;r(false)} }
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function hhmmss(t){if(!t)return '—';return new Date(t*1000).toLocaleTimeString('zh-CN',{hour12:false})}
+function shortTs(t){
+  if(!t) return '—';
+  const d=new Date(t*1000), n=new Date();
+  const hm=d.toLocaleTimeString('zh-CN',{hour12:false});
+  return d.toDateString()===n.toDateString()?hm:((d.getMonth()+1)+'/'+d.getDate()+' '+hm);
+}
 function ago(t){if(!t)return '';const s=Math.max(0,Math.round(Date.now()/1000-t));if(s<60)return s+' 秒前';if(s<3600)return Math.round(s/60)+' 分钟前';return Math.round(s/3600)+' 小时前'}
 function yuan(v){return '¥'+Number(v||0).toFixed(2)}
 async function load(){const r=await fetch('/api/state');S=await r.json();render()}
@@ -714,29 +723,36 @@ async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-
 
 function imgTag(src,cls){return src?('<img class="'+cls+'" src="'+esc(src)+'" loading="lazy" onerror="this.remove()">'):'<div class="'+cls+' ph">无图</div>'}
 
-function renderCart(items){
+let _cartSig='';
+function renderCart(items,force){
   items=items||S.snapshot||[];
   el('cntItem').textContent=items.length?items.length+' 件':'';
   el('tabCart').textContent=items.length;
-  el('items').innerHTML=items.length?items.map(i=>{
-    const on=sel.has(i.sku), star=(S.watches||[]).includes(i.sku);
-    const disc=(i.origin_price&&i.price<i.origin_price)?(i.price/i.origin_price*10).toFixed(1)+'折':'';
-    const tg=(i.tags||'').split(',').filter(Boolean).slice(0,2).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ');
-    return '<div class="card'+(on?' sel':'')+'">'+imgTag(i.image,'thumb')+
-      '<div class="chk" data-sel="'+esc(i.sku)+'"></div>'+
-      '<div class="meta"><div class="nm">'+esc(i.name)+'</div>'+
-      '<div class="pr"><span class="now">'+yuan(i.price)+'</span>'+
-      (i.origin_price&&i.origin_price>i.price?'<span class="was">'+yuan(i.origin_price)+'</span>':'')+
-      (disc?'<span class="off">'+disc+'</span>':'')+'</div>'+
-      '<div class="sub">'+
-        '<span class="star'+(star?' on':'')+'" data-star="'+esc(i.sku)+'" title="重点监控">'+(star?'\u2605':'\u2606')+'</span>'+
-        (tg||'')+(i.qty>1?'<span>x'+i.qty+'</span>':'')+
-        '<button class="del" data-rm="'+esc(i.sku)+'">移除</button>'+
-      '</div></div></div>';
-  }).join(''):'<div class="empty">购物车是空的</div>';
-  el('items').querySelectorAll('[data-sel]').forEach(function(b){ b.onclick=function(){ toggleSel(this.dataset.sel) } });
-  el('items').querySelectorAll('[data-star]').forEach(function(b){ b.onclick=function(){ doWatch(this.dataset.star) } });
-  el('items').querySelectorAll('[data-rm]').forEach(function(b){ b.onclick=function(){ doRemoveOne(this.dataset.rm) } });
+  // 内容没变就不重建 DOM（否则每 4 秒整列表重建一次，图片会闪、滚动位置会丢）
+  const sig=items.map(i=>i.sku+'|'+i.price+'|'+i.qty+'|'+i.origin_price+'|'+(i.tags||'')).join('~')
+    +'#'+(S.watches||[]).join(',');
+  if(force||sig!==_cartSig){
+    _cartSig=sig;
+    el('items').innerHTML=items.length?items.map(i=>{
+      const on=sel.has(i.sku), star=(S.watches||[]).includes(i.sku);
+      const disc=(i.origin_price&&i.price<i.origin_price)?(i.price/i.origin_price*10).toFixed(1)+'折':'';
+      const tg=(i.tags||'').split(',').filter(Boolean).slice(0,2).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ');
+      return '<div class="card'+(on?' sel':'')+'">'+imgTag(i.image,'thumb')+
+        '<div class="chk" data-sel="'+esc(i.sku)+'"></div>'+
+        '<div class="meta"><div class="nm">'+esc(i.name)+'</div>'+
+        '<div class="pr"><span class="now">'+yuan(i.price)+'</span>'+
+        (i.origin_price&&i.origin_price>i.price?'<span class="was">'+yuan(i.origin_price)+'</span>':'')+
+        (disc?'<span class="off">'+disc+'</span>':'')+'</div>'+
+        '<div class="sub">'+
+          '<span class="star'+(star?' on':'')+'" data-star="'+esc(i.sku)+'" title="重点监控">'+(star?'\u2605':'\u2606')+'</span>'+
+          (tg||'')+(i.qty>1?'<span>x'+i.qty+'</span>':'')+
+          '<button class="del" data-rm="'+esc(i.sku)+'">移除</button>'+
+        '</div></div></div>';
+    }).join(''):'<div class="empty">购物车是空的</div>';
+    el('items').querySelectorAll('[data-sel]').forEach(function(b){ b.onclick=function(){ toggleSel(this.dataset.sel) } });
+    el('items').querySelectorAll('[data-star]').forEach(function(b){ b.onclick=function(){ doWatch(this.dataset.star) } });
+    el('items').querySelectorAll('[data-rm]').forEach(function(b){ b.onclick=function(){ doRemoveOne(this.dataset.rm) } });
+  }
   // 选中栏
   const chosen=items.filter(i=>sel.has(i.sku));
   const sum=chosen.reduce((a,b)=>a+Number(b.price),0);
@@ -804,7 +820,9 @@ function render(){
 
   const rt=S.runtime||{}, hs=S.hosts||[];
   const rp=S.replay||{};
-  el('cfgstate').textContent=(rp.cart?'购物车已录制 '+hhmmss(rp.cart_ts):'购物车未录制')+
+  const cartAge=rp.cart_ts?Math.round((Date.now()/1000-rp.cart_ts)/3600):null;
+  el('cfgstate').textContent=(rp.cart?'购物车已录制 '+shortTs(rp.cart_ts):'购物车未录制')+
+    (cartAge!=null&&cartAge>=12?'（'+cartAge+' 小时前，签名可能已过期 → 点「接入账号」重录）':'')+
     ' · 删除'+(rp.write?'已就绪':'未就绪')+' · 下单'+(rp.order?'已就绪':'未就绪');
   el('allowSub').checked=!!S.allow_submit;
   el('c_path').value=S.config.cart_path||'';
@@ -844,7 +862,7 @@ function render(){
 
   setView(view);
   if(!wizAutoOpened && !(S.creds||[]).length){ wizAutoOpened=true; wizOpen(); }
-  if(!addrLoaded && (S.creds||[]).length){ addrLoaded=true; loadAddresses(); }
+  if(!addrLoaded && (S.creds||[]).length){ loadAddresses(); }
 }
 
 let view='cart';
@@ -924,16 +942,32 @@ async function toggleSubmit(cb){
   await post('/api/danger',{allow_submit_order:cb.checked});
   await load();
 }
-async function loadAddresses(){
+async function loadAddresses(force){
+  if(addrLoaded && !force) return;
+  el('addrHint').textContent='加载中…';
   try{
-    const r=await (await fetch('/api/addresses')).json();
-    const sel=el('addrSel');
-    sel.innerHTML=(r.items||[]).map(function(a){
+    const res=await fetch('/api/addresses');
+    const r=await res.json().catch(function(){return {}});
+    if(!res.ok) throw new Error(r.detail||('HTTP '+res.status));
+    const items=r.items||[];
+    el('addrSel').innerHTML=items.length?items.map(function(a){
       return '<option value="'+esc(a.id)+'"'+(a.id===r.active?' selected':'')+'>'+
-        esc((a.title||'')+'　'+(a.in_service?'':'（不在配送范围）'))+'</option>';
-    }).join('') || '<option value="">暂无保存的地址</option>';
-    el('addrHint').textContent=(r.items||[]).length? '' : '先在朴朴 App 里保存一个收货地址';
-  }catch(e){}
+        esc((a.title||'')+(a.in_service?'':'（不在配送范围）'))+'</option>';
+    }).join(''):'<option value="">暂无保存的地址</option>';
+    addrLoaded=true;
+    el('addrHint').textContent=items.length?('共 '+items.length+' 个地址'):'账号里没有保存的地址';
+  }catch(e){
+    // 不自动重试（render 每 4 秒一次，会把接口刷爆），交给「刷新」按钮
+    addrLoaded=true;
+    el('addrSel').innerHTML='<option value="">（未加载）</option>';
+    el('addrHint').textContent='地址加载失败，点「刷新」重试';
+  }
+}
+async function refreshAddr(btn){
+  const old=btn.textContent;
+  btn.disabled=true; btn.textContent='刷新中';
+  await loadAddresses(true);
+  btn.disabled=false; btn.textContent=old;
 }
 async function changeAddr(sel){
   if(!sel.value) return;
@@ -981,9 +1015,11 @@ async function addCred(){
 }
 
 
-let wizTimer=null, wizBase=0, wizAutoOpened=false, addrLoaded=false;
+let wizTimer=null, wizBase=0, wizCart=0, wizAutoOpened=false, addrLoaded=false;
 async function wizOpen(){
   el('wizard').classList.remove('hide');
+  const s=await wizStateGet();
+  wizCart=s?(s.cart_ts||0):0;   // 记下打开时的模板时间，之后比它新才算重录成功
   await wizRefresh();
   if(wizTimer) clearInterval(wizTimer);
   wizTimer=setInterval(wizRefresh, 1200);
@@ -1007,12 +1043,18 @@ async function wizRefresh(){
   }
   if(s.proxy_on){ s2.className='step done'; s2b.textContent='已开启'; s2b.disabled=false }
   else { s2.className=s.cert?'step cur':'step'; s2b.textContent='开启'; s2b.disabled=!s.cert }
-  if(s.has_token){
+  const d=Math.max(0, (s.hits||0) - wizBase);
+  const fresh=(s.cart_ts||0)>wizCart;
+  if(s.has_token&&fresh){
     s3.className='step done';
-    el('wizLive').textContent='已拿到凭证 ✓';
+    el('wizLive').textContent='凭证已拿到 · 购物车模板已重录 ✓';
+  }else if(s.has_token){
+    s3.className=s.proxy_on?'step cur':'step';
+    el('wizLive').textContent=s.proxy_on
+      ? ('凭证已拿到，还差购物车页 —— 进小程序点一下「购物车」（已捕获 '+d+' 条）')
+      : '凭证已拿到 · 购物车模板未重录';
   }else{
     s3.className=(s.cert&&s.proxy_on)?'step cur':'step';
-    const d=Math.max(0, (s.hits||0) - wizBase);
     el('wizLive').textContent = s.proxy_on ? ('已捕获 '+d+' 条请求') : '等待开启代理';
   }
   el('wizDone').disabled = !s.has_token;
@@ -1040,8 +1082,17 @@ async function wizProxy(){
 async function wizFinish(){
   try{ await post('/api/setup/finish'); }catch(e){}
   wizClose();
+  addrLoaded=false;   // 凭证变了，地址需要重新拉一次
   await load();
 }
 
-(async function tick(){ try{ await load(); }catch(e){} setTimeout(tick, S.refreshing?1200:4000); })();
+let lastFull=0;
+(async function tick(){
+  try{
+    // 购物车视图走轻量接口（几百字节），全量状态 20 秒才拉一次
+    if(S.refreshing || Date.now()-lastFull>20000){ lastFull=Date.now(); await load(); }
+    else if(view==='cart'){ await refreshCartOnly(); }
+  }catch(e){}
+  setTimeout(tick, S.refreshing?1200:4000);
+})();
 </script></body></html>"""

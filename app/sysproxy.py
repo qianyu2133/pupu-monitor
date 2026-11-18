@@ -78,6 +78,21 @@ def turn_off():
     return {"restored": restored, "enabled": old_enable == "1"}
 
 
+def heal_on_start():
+    """清掉上次异常退出留下的代理残留。
+
+    进程被强杀（任务管理器结束、崩溃、关机）时 `turn_off()` 不会执行，
+    注册表里就留着 `127.0.0.1:8080`；此时抓包引擎已经不在，整台机器表现为断网。
+    启动时立刻还原——系统代理只在向导抓包时临时开，不需要常驻。
+    """
+    enable, server = _read()
+    if not enable or SERVER not in (server or ""):
+        return None
+    info = turn_off()
+    print(f"[sysproxy] 发现上次残留的系统代理，已还原 → {info['restored']}")
+    return info
+
+
 # ---------- 证书 ----------
 
 def ca_path():

@@ -215,8 +215,9 @@ POST /client/order/orders_order/cancel/{order_id}   // 路径含订单 uuid
 2. 抓包看真实请求路径是否变了 → 改 `tools/grab_token.py` 的录制规则
 3. 业务码变了 → 看 `_send()` 里的成功判定白名单（当前含 `17115002`）
 4. 报「请求头参数缺失」→ `header_profile` 表里的头过期，重抓一次
-5. 报「数据不完整」→ 结算重建的上下文缺失，检查 `cart_info.activity_list` 过滤逻辑
-6. 报「金额不满足条件」→ 检查是否残留 `discount_entity_ids`，或活动门槛未达
+5. 业务码 `200099` → **签名过期**。`sign-v2` 和时间戳绑定，录制模板放久了必然失效（实测约一天）。界面「购物车已录制」的时间戳就是判断依据——时间旧了就重录，不用改代码
+6. 报「数据不完整」→ 结算重建的上下文缺失，检查 `cart_info.activity_list` 过滤逻辑
+7. 报「金额不满足条件」→ 检查是否残留 `discount_entity_ids`，或活动门槛未达
 
 ## 已确认无效的路径（别再试）
 
